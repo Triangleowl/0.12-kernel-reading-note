@@ -43,7 +43,7 @@ unsigned long HIGH_MEMORY = 0;
 
 #define copy_page(from,to) \
 __asm__("cld ; rep ; movsl"::"S" (from),"D" (to),"c" (1024):"cx","di","si")
-
+// 物理内存映射字节图，每个成员表示一个page，对于16MB内存，mem_map最大可以映射15MB内存，对于不能用于主内存的内存，都设置为USED(见mm.h)
 unsigned char mem_map [ PAGING_PAGES ] = {0,};
 
 /*
@@ -440,16 +440,30 @@ void do_no_page(unsigned long error_code,unsigned long address)
 	oom();
 }
 
+/* 
+	mem_map数组记录了15MB内存空间的使用情况。mem_map[i]表示是否已被使用。
+	start_mem: 主内存开始地址，对于16MB的内存，start_mem一般为4MB
+	end_mem: 主内存结束地址，一般为16MB
+*/
 void mem_init(long start_mem, long end_mem)
 {
 	int i;
 
 	HIGH_MEMORY = end_mem;
+	/*
+		#define PAGING_MEMORY (15*1024*1024) // 15MB
+		#define PAGING_PAGES (PAGING_MEMORY>>12) // 内存占的page数
+	*/
 	for (i=0 ; i<PAGING_PAGES ; i++)
 		mem_map[i] = USED;
-	i = MAP_NR(start_mem);
-	end_mem -= start_mem;
-	end_mem >>= 12;
+	/*
+		MAP_NR宏定义在mm.h中
+		#define LOW_MEM 0x100000
+		#define MAP_NR(addr) ( ((addr)-LOW_MEM) >>12)
+	*/
+	i = MAP_NR(start_mem);		// 主内存起始地址对应的mem_map的索引号
+	end_mem -= start_mem;		// 主内存大小
+	end_mem >>= 12;				// 主内存占的page数量(page大小为4KB)
 	while (end_mem-->0)
 		mem_map[i++]=0;
 }

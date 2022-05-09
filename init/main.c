@@ -20,6 +20,10 @@
  * won't be any messing with the stack from main(), but we define
  * some others too.
  */
+
+/*
+	_syscallN 是宏定义，在unistd.h中，N表示参数的个数(即0表示不接收参数)
+*/
 static inline _syscall0(int,fork)
 static inline _syscall0(int,pause)
 static inline _syscall1(int,setup,void *,BIOS)
@@ -130,39 +134,94 @@ void main(void)		/* This really IS void, no error here. */
  * Interrupts are still disabled. Do necessary setups, then
  * enable them
  */
+/*
+	！！！！！！此时处于关中断的状态
+*/
+/*
+	保存setup.S保存在0x900xx处的系统参数信息(根文件系统设备号、交换文件设备号、终端屏幕参数等)
+	ROOT_DEV定义在super.c
+	SWAP_DEV定义在swap.c
+
+*/
  	ROOT_DEV = ORIG_ROOT_DEV;
  	SWAP_DEV = ORIG_SWAP_DEV;
 	sprintf(term, "TERM=con%dx%d", CON_COLS, CON_ROWS);
 	envp[1] = term;	
 	envp_rc[1] = term;
  	drive_info = DRIVE_INFO;
-	memory_end = (1<<20) + (EXT_MEM_K<<10);
-	memory_end &= 0xfffff000;
-	if (memory_end > 16*1024*1024)
+	
+	/*
+		memory_end表示内存的大小(以字节为单位)
+	*/
+	memory_end = (1<<20) + (EXT_MEM_K<<10);		// 1MB + EXT+MEM_K * 1024 bytes
+	memory_end &= 0xfffff000;					// 内存凑够page大小的整数倍(4KB)
+	if (memory_end > 16*1024*1024)				// 如果内存大小超过16M，则只使用16MB
 		memory_end = 16*1024*1024;
-	if (memory_end > 12*1024*1024) 
+	if (memory_end > 12*1024*1024) 				// 如果内存大于12MB，则缓冲区末端为4M
 		buffer_memory_end = 4*1024*1024;
-	else if (memory_end > 6*1024*1024)
+	else if (memory_end > 6*1024*1024)			// 如果内存大于6MB，则缓冲区末端为2MB
 		buffer_memory_end = 2*1024*1024;
 	else
-		buffer_memory_end = 1*1024*1024;
-	main_memory_start = buffer_memory_end;
+		buffer_memory_end = 1*1024*1024;		// 如果小于6M，则缓冲区末端为1MB
+	main_memory_start = buffer_memory_end;		// 主存开始的地方，缓冲区结束的地方
+/*
+	如果Makefile中定义了RAMDISK，则主存要往上移动
+*/
 #ifdef RAMDISK
 	main_memory_start += rd_init(main_memory_start, RAMDISK*1024);
 #endif
+	/*
+		主内存初始化，在mm/memory.c
+		mem_map[]数组用于记录内存是否已被进程占用，mem_init将所有的主内存标记为未使用。
+	*/
 	mem_init(main_memory_start,memory_end);
+	/*
+		陷阱门(硬件中断向量)初始化，在kernel/traps.c
+		设置各种中断的中断服务程序，将IDTE设置成响应的值而已
+	*/
 	trap_init();
+	/*
+		块设备初始化，blk_drv/ll_rw_blk.c
+	*/
 	blk_dev_init();
+	/*
+		字符设备初始化，chr_drv/tty_io.c
+	*/
 	chr_dev_init();
+	/*
+		tty初始化， chr_drv/tty_io.c
+	*/
 	tty_init();
+	/*
+		设置开机时间，time_init()在本文件中
+	*/
 	time_init();
+	/*
+		调度程序初始化
+	*/
 	sched_init();
+	/*
+		缓冲区管理初始化
+	*/
 	buffer_init(buffer_memory_end);
+	/*
+		硬盘初始化
+	*/
 	hd_init();
+	/*
+		软驱初始化
+	*/
 	floppy_init();
+	/*
+		开启中断
+	*/
 	sti();
+	/*
+		include/asm/system.h
+	*/
 	move_to_user_mode();
 	if (!fork()) {		/* we count on this going ok */
+		// 子进程调用init，父进程不会进来
 		init();
 	}
 /*

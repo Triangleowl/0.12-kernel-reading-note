@@ -111,6 +111,8 @@ no_disk1:
 is_disk1:
 
 ! now we want to move to protected mode ...
+! ------------------------- 开始进入保护模式 -------------------------
+! ------------------------- 不对, 只是想(want)进入保护模式 -------------------------
 
 	cli			! no interrupts allowed !
 
@@ -118,6 +120,7 @@ is_disk1:
 
 	mov	ax,#0x0000
 	cld			! 'direction'=0, movs moves forward
+! 把setup.S的指令从0x90000移动到0x0000
 do_move:
 	mov	es,ax		! destination segment
 	add	ax,#0x1000
@@ -135,12 +138,15 @@ do_move:
 
 end_move:
 	mov	ax,#SETUPSEG	! right, forgot this at first. didn't work :-)
+! 设置 IDTR 和 GDTR, 此时已禁止中断, 所以 IDTR 设置为 0 没问题 :)
 	mov	ds,ax
 	lidt	idt_48		! load idt with 0,0
+						! 加载 IDTR
 	lgdt	gdt_48		! load gdt with whatever appropriate
+						! 加载 GDTR
 
 ! that was painless, now we enable A20
-
+! 启用A20地址线
 	call	empty_8042
 	mov	al,#0xD1		! command write
 	out	#0x64,al
@@ -156,6 +162,7 @@ end_move:
 ! rectify it afterwards. Thus the bios puts interrupts at 0x08-0x0f,
 ! which is used for the internal hardware interrupts as well. We just
 ! have to reprogram the 8259's, and it isn't fun.
+! 设置8259A中断控制器
 
 	mov	al,#0x11		! initialization sequence
 	out	#0x20,al		! send it to 8259A-1
@@ -194,6 +201,8 @@ end_move:
 ! we let the gnu-compiled 32-bit programs do that. We just jump to
 ! absolute address 0x00000, in 32-bit protected mode.
 
+! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! 开启保护模式, 并跳转到system模块执行 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+! 使用 lmsw 给CR0赋值, 这么做是为了兼容286CPU, 现代的做法应该是 mov cr0, ax :)
 	mov	ax,#0x0001	! protected mode (PE) bit
 	lmsw	ax		! This is it!
 	jmpi	0,8		! jmp offset 0 of segment 8 (cs)
@@ -563,7 +572,8 @@ docr:	push	ax
 	pop	cx
 	pop	ax
 	ret	
-	
+
+! 定义了GDT的 0,1,2三项
 gdt:
 	.word	0,0,0,0		! dummy
 
@@ -584,6 +594,7 @@ idt_48:
 gdt_48:
 	.word	0x800		! gdt limit=2048, 256 GDT entries
 	.word	512+gdt,0x9	! gdt base = 0X9xxxx
+						! 看懂了吗? 高字为0x09, 所以GDTR就是0x9xxxx
 
 msg1:		.ascii	"Press <RETURN> to see SVGA-modes available or any other key to continue."
 		db	0x0d, 0x0a, 0x0a, 0x00

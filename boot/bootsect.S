@@ -36,6 +36,7 @@ begbss:
 SETUPLEN = 4				! nr of setup-sectors
 BOOTSEG  = 0x07c0			! original address of boot-sector
 INITSEG  = DEF_INITSEG			! we move boot here - out of the way
+								! DEF_INITSEG = 0x9000
 SETUPSEG = DEF_SETUPSEG			! setup starts here
 SYSSEG   = DEF_SYSSEG			! system loaded at 0x10000 (65536).
 ENDSEG   = SYSSEG + SYSSIZE		! where to stop loading
@@ -53,19 +54,21 @@ start:
 	mov	cx,#256
 	sub	si,si
 	sub	di,di
-	rep
-	movw
-	jmpi	go,INITSEG
+	rep						! 循环次数是cx(cx=256), mov一次拷贝两个字节, 所以只需要512/2=256次
+	movw					! 注意这不是intel/AT&T汇编语法, 这是要执行 mov es:di, ds:si
+							! 即将0x7c00开始的512字节拷贝到0x90000处.
+	jmpi	go,INITSEG		! INITSEG是段地址, go是偏移, jmpi是段间跳转(jump intersegment)
 
-go:	mov	ax,cs		
+go:	mov	ax,cs				! 此时, 段地址已经是0x9000, 而不再是0x07c0
 	mov	dx,#0xfef4	! arbitrary value >>512 - disk parm size
 
-	mov	ds,ax
+	mov	ds,ax				! ds和es也设置为0x9000
 	mov	es,ax
 	push	ax
 
 	mov	ss,ax		! put stack at 0x9ff00 - 12.
-	mov	sp,dx
+					! ss也设置为0x9000
+	mov	sp,dx		! sp设置为0xfef4
 /*
  *	Many BIOS's default disk parameter tables will not 
  *	recognize multi-sector reads beyond the maximum sector number
@@ -83,74 +86,110 @@ go:	mov	ax,cs
  *		fs = 0, gs = parameter table segment
  */
 
-
-	push	#0
+	! 设置 si 寄存器
+	push	#0		! 将立即数0压入stack,然后弹出给fs
 	pop	fs
 	mov	bx,#0x78		! fs:bx is parameter table address
-	seg fs
+						! fs:bx 存放的软盘驱动参数地址表
+	seg fs				! seg fs 的作用是将下一行汇编指令的段寄存器指定为fs寄存器,(即bx的段寄存器用fs,si寄存器的段寄存器为gs)
+						! seg fs 只影响[下一行]汇编的段寄存器.
 	lgs	si,(bx)			! gs:si is source
-
+						! 相当于 mov gs:si, fs:bx, 作用是将中断向量表中的第0x1E(0x78 = 0x1E * 4)项取出软盘驱动参数,将其放到si
+	! 设置 di 寄存器
 	mov	di,dx			! es:di is destination
+						! es = 0x9000, di = dx = 0xfef4, 即目的地址为 0x9fef4
 	mov	cx,#6			! copy 12 bytes
 	cld
 
 	rep
 	seg gs
-	movw
+	movw				! 相当于 mov es:di, gs:si, 重复6次
 
-	mov	di,dx
-	movb	4(di),*18		! patch sector count
+	mov	di,dx			! 重复执行6次movw指令, 此时已经将软盘驱动参数拷贝了一份放在 es:dx 处, 下面要做的就是修改拷贝的内容
+						! 并让中断向量表的第 0x1E 指向新的参数
+	movb	4(di),*18	! patch sector count
+						! 修改拷贝后的参数
 
+	seg fs				! 这四行汇编是将 0x1E 号中断向量指向新的参数地址
+	mov	(bx),di			! 低地址存放 offset
 	seg fs
-	mov	(bx),di
-	seg fs
-	mov	2(bx),es
+	mov	2(bx),es		! 高地址存放 segment
 
-	pop	ax
+	pop	ax				! 弹出ax, ax = 0x9000, 拷贝给 fs/gs 寄存器
 	mov	fs,ax
 	mov	gs,ax
 	
 	xor	ah,ah			! reset FDC 
-	xor	dl,dl
-	int 	0x13	
+						! 复位软盘控制器, 让其采用新参数
+	xor	dl,dl			! dl = 0, 第一个软驱
+	int 	0x13		! BIOS 提供的中断服务
 
 ! load the setup-sectors directly after the bootblock.
 ! Note that 'es' is already set up.
+
+! https://en.wikipedia.org/wiki/INT_13H
+! BIOS 0x13 中断服务, 功能号存在 ah 中, 参数存在其他寄存器中
+! ah = 2 功能是把磁盘内容读到内存中, 此功能需要的参数如下:
+! al: 要读取的扇区数量;
+! ch: 磁道(柱面号的低8位);
+! cl: 开始扇区位(bit0~bit5), 磁道号高2位(bit6~bit7);
+! dh: 磁头号;
+! dl: 驱动器号(如果是硬盘则bit7要置位);
+! es:bx: 指向内存缓冲区的地址;
+! 结果保存在如下寄存器中:
+! CF: 如果读磁盘出错, 则CF标志位置位;
+! ah: 保存返回码， 如果出错, 可以将此码打印到屏幕上;
+! al: 返回实际读取的扇区数量;
 
 load_setup:
 	xor	dx, dx			! drive 0, head 0
 	mov	cx,#0x0002		! sector 2, track 0
 	mov	bx,#0x0200		! address = 512, in INITSEG
 	mov	ax,#0x0200+SETUPLEN	! service 2, nr of sectors
+							! ah = 2, read sector from drive
 	int	0x13			! read it
 	jnc	ok_load_setup		! ok - continue
 
 	push	ax			! dump error code
-	call	print_nl
+						! 上面的读磁盘操作出错才会执行这段指令, 错误码在ah中
+	call	print_nl	! 打印回车换行(可能nl是new linue吧)
 	mov	bp, sp
-	call	print_hex
+	call	print_hex	! 打印错误码
 	pop	ax	
 	
 	xor	dl, dl			! reset FDC
+						! 复位软盘控制器
 	xor	ah, ah
 	int	0x13
-	j	load_setup
+	j	load_setup		! 重新执行load_setup操作
 
 ok_load_setup:
 
 ! Get disk drive parameters, specifically nr of sectors/track
-
+! ah = 8 功能是读取驱动的参数, 此功能需要的参数有:
+! dl: 驱动的索引, 最高位用于区分软盘/硬盘, 软盘为0, 硬盘位1, 即如果读取硬盘驱动的参数, dl = 0x80
+! 结果保存在如下寄存器中:
+! CF: 错误时置位;
+! ah: 返回码；
+! bl: 驱动类型(AT/PS2)
+! ch: 最大磁道号的低8位;
+! cl: 每磁道最大扇区数(位 0-5)，最大磁道号高 2 位(位 6-7);
+! dh: 最大磁头数;
+! dl: 驱动器数量;
+! es:di 软驱磁盘参数表(es被修改了)
 	xor	dl,dl
 	mov	ah,#0x08		! AH=8 is get drive parameters
+						! 使用 BIOS 的 0x13 中断的 8 号功能(Read Drive Parameters)
 	int	0x13
-	xor	ch,ch
-	seg cs
-	mov	sectors,cx
+	xor	ch,ch			! ch清零, 此时cx中只剩下了每磁道最大扇区数
+	seg cs				! 指定下面一行汇编使用 cs 作为段寄存器, 实际此时 cs = ds = es = fs = gs = 0x9000, 所以此命令完全没必要
+	mov	sectors,cx		! 每磁道扇区数存放到sectors变量中
 	mov	ax,#INITSEG
-	mov	es,ax
+	mov	es,ax			! 执行完 int 0x13 改变了 es 寄存器, 这里恢复 es
 
 ! Print some inane message
-
+! BIOS 0x10 号中断服务: https://en.wikipedia.org/wiki/INT_10H
+! 0x10号中断服务的 0x03 和 0x13 号功能用于在屏幕上输出信息
 	mov	ah,#0x03		! read cursor pos
 	xor	bh,bh
 	int	0x10
@@ -166,15 +205,16 @@ ok_load_setup:
 
 	mov	ax,#SYSSEG
 	mov	es,ax		! segment of 0x010000
-	call	read_it
-	call	kill_motor
-	call	print_nl
+	call	read_it			! 将system读取到0x10000
+	call	kill_motor		! 关闭驱动马达(这样就能知道驱动器的状态了?)
+	call	print_nl		! 光标回车换行
 
 ! After that we check which root-device to use. If the device is
 ! defined (!= 0), nothing is done and the given device is used.
 ! Otherwise, either /dev/PS0 (2,28) or /dev/at0 (2,8), depending
 ! on the number of sectors that the BIOS reports currently.
-
+! 检测使用哪个根文件系统设备, 如果已经指定了设备就使用指定的设备;
+! 如果没有指定就根据BIOS报告的每磁道扇区数来确定.
 	seg cs
 	mov	ax,root_dev
 	or	ax,ax
@@ -196,8 +236,8 @@ root_defined:
 ! after that (everyting loaded), we jump to
 ! the setup-routine loaded directly after
 ! the bootblock:
-
-	jmpi	0,SETUPSEG
+! ---------------------------- 任务完成, 溜了溜了 ---------------------------------
+	jmpi	0,SETUPSEG	! 跳转到 0x9020:0000 执行(源码见setup.s)
 
 ! This routine loads the system at address 0x10000, making sure
 ! no 64kB boundaries are crossed. We try to load it as fast as

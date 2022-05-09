@@ -186,6 +186,10 @@ void trap_init(void)
 {
 	int i;
 
+	/*
+		第一个参数是中断向量号
+		第二个参数是中断服务程序的地址
+	*/
 	set_trap_gate(0,&divide_error);
 	set_trap_gate(1,&debug);
 	set_trap_gate(2,&nmi);

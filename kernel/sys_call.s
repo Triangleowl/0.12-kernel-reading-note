@@ -81,50 +81,57 @@ reschedule:
 	pushl $ret_from_sys_call
 	jmp _schedule
 .align 2
+/*
+	system_call 的入口点，由int 0x80触发此中断
+*/
 _system_call:
 	push %ds
 	push %es
 	push %fs
 	pushl %eax		# save the orig_eax
-	pushl %edx		
+	pushl %edx		# 0.12内核提供的系统调用最多支持传入3个参数
 	pushl %ecx		# push %ebx,%ecx,%edx as parameters
 	pushl %ebx		# to the system call
-	movl $0x10,%edx		# set up ds,es to kernel space
+	movl $0x10,%edx		# set up ds,es to kernel space	0x10为内核的数据段的段选择子(见head.s的倒数第三行)
 	mov %dx,%ds
 	mov %dx,%es
 	movl $0x17,%edx		# fs points to local data space
 	mov %dx,%fs
-	cmpl _NR_syscalls,%eax
+	cmpl _NR_syscalls,%eax	# NR_syscalls = sizeof(sys_call_table)/sizeof(fn_ptr); 系统调用数，见sys.h，检查系统调用号是否有效
 	jae bad_sys_call
-	call _sys_call_table(,%eax,4)
-	pushl %eax
+	call _sys_call_table(,%eax,4)	# sys_call_table 在 sys.h 中
+	pushl %eax				# 系统调用的返回值压栈
 2:
-	movl _current,%eax
-	cmpl $0,state(%eax)		# state
-	jne reschedule
-	cmpl $0,counter(%eax)		# counter
-	je reschedule
+	movl _current,%eax		# 获取当前任务（进程）数据结构指针
+	cmpl $0,state(%eax)		# state，0 表示就绪态
+	jne reschedule			# 如果不是就绪态
+	cmpl $0,counter(%eax)	# counter，剩余的时间片
+	je reschedule			# 如果counter为0表明时间片已用完，重新调度
+
+/*
+	中断服务函数执行完毕，恢复现场，不仅被系统调用这一中断调用，其他中断也会复用ret_from_sys_call
+*/
 ret_from_sys_call:
 	movl _current,%eax
 	cmpl _task,%eax			# task[0] cannot have signals
-	je 3f
-	cmpw $0x0f,CS(%esp)		# was old code segment supervisor ?
+	je 3f					# 如果当前任务为 task[0]则跳转到label 3
+	cmpw $0x0f,CS(%esp)		# was old code segment supervisor ? 判断是否是用户态代码段(0x0f: 0b1111, DPL=3), 如果段选择子不是0x0f，
+	jne 3f					# 说明不是通过_system_call执行到此处的，那就是从其他的中断jmp到ret_from_sys_call的，所以跳转到label 3
+	cmpw $0x17,OLDSS(%esp)	# was stack segment = 0x17 ? 如果远堆栈段的段选择子不是0x17，说明不是从用户态过来的，跳转到label 3
 	jne 3f
-	cmpw $0x17,OLDSS(%esp)		# was stack segment = 0x17 ?
-	jne 3f
-	movl signal(%eax),%ebx
-	movl blocked(%eax),%ecx
-	notl %ecx
-	andl %ebx,%ecx
-	bsfl %ecx,%ecx
-	je 3f
-	btrl %ecx,%ebx
-	movl %ebx,signal(%eax)
-	incl %ecx
-	pushl %ecx
-	call _do_signal
-	popl %ecx
-	testl %eax, %eax
+	movl signal(%eax),%ebx	# 取信号位图 -> ebx，1bit表示1种信号，共32种
+	movl blocked(%eax),%ecx	# 取阻塞（屏蔽）信号位图 -> ecx
+	notl %ecx				# 按位取反
+	andl %ebx,%ecx			# 获得许可的信号位图
+	bsfl %ecx,%ecx			# 从低位（位 0）开始扫描位图，看是否有 1 的位， 若有，则 ecx 保留该位的偏移值（即第几位 0--31）
+	je 3f					# 如果没有信号则向前跳转退出。
+	btrl %ecx,%ebx			# 复位该信号（ebx 含有原 signal 位图）
+	movl %ebx,signal(%eax)	# 重新保存 signal 位图信息 current->signal。
+	incl %ecx				# 信号值取值范围为[1,32]，故需要对ecx做加一调整
+	pushl %ecx				# 信号值作为参数压入栈中
+	call _do_signal			# 调用信号处理函数
+	popl %ecx				# 弹出信号值
+	testl %eax, %eax		
 	jne 2b		# see if we need to switch tasks, or do more signals
 3:	popl %eax
 	popl %ebx
@@ -220,16 +227,16 @@ _sys_execve:
 
 .align 2
 _sys_fork:
-	call _find_empty_process
-	testl %eax,%eax
-	js 1f
+	call _find_empty_process	// 从task结构体中找一个未使用的项，返回其索引
+	testl %eax,%eax				// testl 对 src 和 dst 进行与操作，结果不影响src/dst，只影响标志位
+	js 1f						// 如果SF置位，即没有找到empty process
 	push %gs
 	pushl %esi
 	pushl %edi
 	pushl %ebp
 	pushl %eax
-	call _copy_process
-	addl $20,%esp
+	call _copy_process			// 调用 copy_process函数，在fork.c中
+	addl $20,%esp				// 将压入栈中的东西丢弃
 1:	ret
 
 _hd_interrupt:

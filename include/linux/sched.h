@@ -205,6 +205,13 @@ extern int in_group_p(gid_t grp);
 #define FIRST_LDT_ENTRY (FIRST_TSS_ENTRY+1)
 #define _TSS(n) ((((unsigned long) n)<<4)+(FIRST_TSS_ENTRY<<3))
 #define _LDT(n) ((((unsigned long) n)<<4)+(FIRST_LDT_ENTRY<<3))
+/* 
+	lldt指令参考 https://pdos.csail.mit.edu/6.828/2018/readings/i386/LLDT.htm
+	具体说来就是 lldt 指令的操作数是内存地址或者是一个寄存器，操作数的长度是16位
+	所以下面的的操作数都是使用寄存器ax，而不是eax
+	ax是一个段选择子，拿着这个选择子去GDT里找到对应的描述符，取出描述符里的base和limit加载到寄存器中
+	所以要提前将ldtr的值存到GDT表中
+*/
 #define ltr(n) __asm__("ltr %%ax"::"a" (_TSS(n)))
 #define lldt(n) __asm__("lldt %%ax"::"a" (_LDT(n)))
 #define str(n) \

@@ -107,9 +107,9 @@ setup_idt:
 	IDTE 占8字节, 刚好是构造 IDTE, eax为低四字节内容, edx为高四字节内容
 */
 	lea ignore_int,%edx
-	movl $0x00080000,%eax
-	movw %dx,%ax		/* selector = 0x0008 = cs */
-	movw $0x8E00,%dx	/* interrupt gate - dpl=0, present */
+	movl $0x00080000,%eax	
+	movw %dx,%ax		
+	movw $0x8E00,%dx	
 /*
 	_idt -> edi, _idt是中断向量表的其实地址
 */
@@ -282,11 +282,17 @@ setup_paging:
 
 .align 2
 .word 0
+/*
+	idt_descr --> idtr, idt_descr是IDT的base address和limit
+*/
 idt_descr:
 	.word 256*8-1		# idt contains 256 entries
 	.long _idt
 .align 2
 .word 0
+/*
+	gdt_descr --> gdtr, gdt_descr是GDT的base address和limit
+*/
 gdt_descr:
 	.word 256*8-1		# so does gdt (not that that's any
 	.long _gdt		# magic number, but it works for me :^)

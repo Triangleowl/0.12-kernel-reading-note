@@ -11,12 +11,12 @@
 #include <signal.h>
 #include <errno.h>
   
-int sys_sgetmask()
+int sys_sgetmask()		// 获取信号屏蔽位图
 {
 	return current->blocked;
 }
 
-int sys_ssetmask(int newmask)
+int sys_ssetmask(int newmask)	// 设置信号屏蔽位图，SIGKILL/SIGSTOP不能被屏蔽
 {
 	int old=current->blocked;
 
@@ -24,7 +24,7 @@ int sys_ssetmask(int newmask)
 	return old;
 }
 
-int sys_sigpending(sigset_t *set)
+int sys_sigpending(sigset_t *set)	// 检测并获取接收到的但是被屏蔽的信号，还未处理的信号的位图放入set中
 {
     /* fill in "set" with signals pending but blocked. */
     verify_area(set,4);
@@ -55,7 +55,7 @@ int sys_sigsuspend(int restart, unsigned long old_mask, unsigned long set)
 	return -EINTR;
     }
     /* we're not restarting.  do the work */
-    *(&restart) = 1;
+    *(&restart) = 1;			// 这么做有啥用，能改变caller的restart的值吗？？？
     *(&old_mask) = current->blocked;
     current->blocked = set;
     (void) sys_pause();			/* return after a signal arrives */
@@ -92,8 +92,8 @@ int sys_signal(int signum, long handler, long restorer)
 	tmp.sa_mask = 0;
 	tmp.sa_flags = SA_ONESHOT | SA_NOMASK;
 	tmp.sa_restorer = (void (*)(void)) restorer;
-	handler = (long) current->sigaction[signum-1].sa_handler;
-	current->sigaction[signum-1] = tmp;
+	handler = (long) current->sigaction[signum-1].sa_handler;	// 先取出当前的handler
+	current->sigaction[signum-1] = tmp;							// 更新信号处理函数
 	return handler;
 }
 
@@ -104,11 +104,11 @@ int sys_sigaction(int signum, const struct sigaction * action,
 
 	if (signum<1 || signum>32 || signum==SIGKILL || signum==SIGSTOP)
 		return -EINVAL;
-	tmp = current->sigaction[signum-1];
+	tmp = current->sigaction[signum-1];		// 旧信号处理相关信息
 	get_new((char *) action,
-		(char *) (signum-1+current->sigaction));
+		(char *) (signum-1+current->sigaction));	// 设置新的信号处理
 	if (oldaction)
-		save_old((char *) &tmp,(char *) oldaction);
+		save_old((char *) &tmp,(char *) oldaction);	// 如果oldaction不为空，返回旧的信号处理信息
 	if (current->sigaction[signum-1].sa_flags & SA_NOMASK)
 		current->sigaction[signum-1].sa_mask = 0;
 	else

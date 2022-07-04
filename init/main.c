@@ -197,7 +197,7 @@ void main(void)		/* This really IS void, no error here. */
 	*/
 	time_init();
 	/*
-		调度程序初始化
+		调度程序初始化，最后一步是设置 system_call 的 interrupt gate 描述符
 	*/
 	sched_init();
 	/*
@@ -219,7 +219,7 @@ void main(void)		/* This really IS void, no error here. */
 	/*
 		include/asm/system.h
 	*/
-	move_to_user_mode();
+	move_to_user_mode(); // 此函数执行完成后CPL=3，不是最高的特权级了
 	if (!fork()) {		/* we count on this going ok */
 		// 子进程调用init，父进程不会进来
 		init();
@@ -250,41 +250,48 @@ void init(void)
 {
 	int pid,i;
 
+	// setup是一个系统调用，用于读取硬盘参数并加载虚拟盘和安装根文件系统设备，实现见kernel/blk_drv/hd.c
 	setup((void *) &drive_info);
-	(void) open("/dev/tty1",O_RDWR,0);
-	(void) dup(0);
-	(void) dup(0);
+	(void) open("/dev/tty1",O_RDWR,0); // 打开终端控制台，第一次打开，所以分配的文件描述符为0，即stdin
+	(void) dup(0);	// 复制文件描述符0，得到文件描述符1，即stdout
+	(void) dup(0);	// 同理，得到文件描述符2，即stderr
+	// NR_BUFFERS: 缓冲区块数
+	// BLOCK_SIZE: 缓冲区大小
 	printf("%d buffers = %d bytes buffer space\n\r",NR_BUFFERS,
 		NR_BUFFERS*BLOCK_SIZE);
+	// memory_end-main_memory_start: 主内存去内的空闲内存(字节为单位)
 	printf("Free mem: %d bytes\n\r",memory_end-main_memory_start);
 	if (!(pid=fork())) {
-		close(0);
+		close(0);	// 关闭stdin，则下面open打开/etc/rc得到的文件描述符是0，即将stdin重定向到/ect/rc中
 		if (open("/etc/rc",O_RDONLY,0))
 			_exit(1);
-		execve("/bin/sh",argv_rc,envp_rc);
+		// 让/bin/sh执行/ect/rc中的命令，注意这里sh是非交互方式运行的，所以执行完/ect/rc中的命令后就会退出
+		execve("/bin/sh",argv_rc,envp_rc);	
 		_exit(2);
 	}
 	if (pid>0)
-		while (pid != wait(&i))
+		while (pid != wait(&i))	// 等待上面创建的那个子进程结束
 			/* nothing */;
 	while (1) {
 		if ((pid=fork())<0) {
 			printf("Fork failed in init\r\n");
 			continue;
 		}
-		if (!pid) {
+		if (!pid) {				// 子进程运行/bin/sh
 			close(0);close(1);close(2);
 			setsid();
 			(void) open("/dev/tty1",O_RDWR,0);
-			(void) dup(0);
-			(void) dup(0);
+			(void) dup(0);		// 复制文件描述符0，见fs/fcntl.c:sys_dup()
+			(void) dup(0);		// 同上
 			_exit(execve("/bin/sh",argv,envp));
 		}
-		while (1)
+		while (1)				// 父进程等待/bin/sh子进程结束
 			if (pid == wait(&i))
-				break;
+				break;			// 如果/bin/sh子进程结束，则再重新创建一个
 		printf("\n\rchild %d died with code %04x\n\r",pid,i);
 		sync();
 	}
+	// _exit和exit是有区别的，_exit是sys_exit系统调用，exit是普通库函数。
+	// exit会先执行清理操作，然后再调用sys_exit
 	_exit(0);	/* NOTE! _exit, not exit() */
 }

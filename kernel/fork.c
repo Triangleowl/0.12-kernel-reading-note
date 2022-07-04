@@ -65,6 +65,7 @@ int copy_mem(int nr,struct task_struct * p)
  * information (task[nr]) and sets up the necessary registers. It
  * also copies the data segment in it's entirety.
  */
+// 第一个参数nr是_sys_fork调用_find_empty_process找到的empty_process在task数组中的索引
 int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 		long ebx,long ecx,long edx, long orig_eax, 
 		long fs,long es,long ds,
@@ -77,21 +78,30 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 	p = (struct task_struct *) get_free_page();
 	if (!p)
 		return -EAGAIN;
-	task[nr] = p;
+	task[nr] = p;	// task是记录任务的数组，nr是任务的编号，也是pid
+	/*
+		下面是直接将current的进程结构体的信息整个复制到p中
+	*/
 	*p = *current;	/* NOTE! this doesn't copy the supervisor stack */
+
+	// 下面是对p的进程结构体做一些调整，子进程不能全盘照抄父进程的:)
+
+	// 首先是修改状态、pid等信息
 	p->state = TASK_UNINTERRUPTIBLE;
 	p->pid = last_pid;
-	p->counter = p->priority;
-	p->signal = 0;
-	p->alarm = 0;
-	p->leader = 0;		/* process leadership doesn't inherit */
-	p->utime = p->stime = 0;
-	p->cutime = p->cstime = 0;
-	p->start_time = jiffies;
+	p->counter = p->priority;	// 运行时间片值
+	p->signal = 0;				// 信号位图
+	p->alarm = 0;				// 报警定时器
+	p->leader = 0;				/* process leadership doesn't inherit */
+	p->utime = p->stime = 0;	// 用户态/内核态运行时间
+	p->cutime = p->cstime = 0;	// 子进程用户态/内核态运行时间
+	p->start_time = jiffies;	// 进程开始的时间
+
+	// 接着修改任务状态段TSS内容
 	p->tss.back_link = 0;
-	p->tss.esp0 = PAGE_SIZE + (long) p;
-	p->tss.ss0 = 0x10;
-	p->tss.eip = eip;
+	p->tss.esp0 = PAGE_SIZE + (long) p;	// 任务内核态栈指针
+	p->tss.ss0 = 0x10;					// 内核态栈的段选择子
+	p->tss.eip = eip;					// eip
 	p->tss.eflags = eflags;
 	p->tss.eax = 0;
 	p->tss.ecx = ecx;
@@ -101,21 +111,22 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 	p->tss.ebp = ebp;
 	p->tss.esi = esi;
 	p->tss.edi = edi;
-	p->tss.es = es & 0xffff;
+	p->tss.es = es & 0xffff;	// 段选择子仅低16位有效
 	p->tss.cs = cs & 0xffff;
 	p->tss.ss = ss & 0xffff;
 	p->tss.ds = ds & 0xffff;
 	p->tss.fs = fs & 0xffff;
 	p->tss.gs = gs & 0xffff;
-	p->tss.ldt = _LDT(nr);
+	p->tss.ldt = _LDT(nr);		// 任务LDT描述符的段选择子（LDT描述符在GDT中哦）
 	p->tss.trace_bitmap = 0x80000000;
 	if (last_task_used_math == current)
 		__asm__("clts ; fnsave %0 ; frstor %0"::"m" (p->tss.i387));
-	if (copy_mem(nr,p)) {
+	if (copy_mem(nr,p)) {		// 返回非0表示出错
 		task[nr] = NULL;
 		free_page((long) p);
 		return -EAGAIN;
 	}
+	// 子进程会继承父进程打开的文件，遍历父进程打开的文件，将其ref加1
 	for (i=0; i<NR_OPEN;i++)
 		if (f=p->filp[i])
 			f->f_count++;
@@ -127,17 +138,24 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 		current->executable->i_count++;
 	if (current->library)
 		current->library->i_count++;
+	/*
+	gdt是一个desc_struct结构体，见head.h，其定义在head.s最后几行
+	typedef struct desc_struct {
+		unsigned long a,b;
+	} desc_table[256];
+	nr乘2(左移1位)是因为每个进程需要占两个段描述符(tss和ldt)
+	*/
 	set_tss_desc(gdt+(nr<<1)+FIRST_TSS_ENTRY,&(p->tss));
 	set_ldt_desc(gdt+(nr<<1)+FIRST_LDT_ENTRY,&(p->ldt));
-	p->p_pptr = current;
-	p->p_cptr = 0;
-	p->p_ysptr = 0;
+	p->p_pptr = current;	// 自己成的父进程位当前进程
+	p->p_cptr = 0;			// 子进程的最新子进程指针为0
+	p->p_ysptr = 0;			// 
 	p->p_osptr = current->p_cptr;
 	if (p->p_osptr)
 		p->p_osptr->p_ysptr = p;
 	current->p_cptr = p;
 	p->state = TASK_RUNNING;	/* do this last, just in case */
-	return last_pid;
+	return last_pid;		// 返回子进程的pid，用户态的进程从eax中读取返回值，所以子进程的返回值为0
 }
 
 int find_empty_process(void)

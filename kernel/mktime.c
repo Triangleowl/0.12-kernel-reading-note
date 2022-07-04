@@ -40,7 +40,7 @@ static int month[12] = {
 
 long kernel_mktime(struct tm * tm)
 {
-	long res;
+	long res;	// 记录的是1900-01-01至今的秒数
 	int year;
 
 	year = tm->tm_year - 70;

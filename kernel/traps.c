@@ -69,7 +69,7 @@ static void die(char * str,long esp_ptr,long nr)
 		esp[1],esp[0],esp[2],esp[4],esp[3]);
 	printk("fs: %04x\n",_fs());
 	printk("base: %p, limit: %p\n",get_base(current->ldt[1]),get_limit(0x17));
-	if (esp[4] == 0x17) {
+	if (esp[4] == 0x17) {	// 如果中断时由用户态程序触发的，则esp[4] == 0x17，打印用户栈中的4个字节(用户栈的esp值)
 		printk("Stack: ");
 		for (i=0;i<4;i++)
 			printk("%p ",get_seg_long(0x17,i+(long *)esp[3]));
@@ -110,7 +110,7 @@ void do_int3(long * esp, long error_code,
 {
 	int tr;
 
-	__asm__("str %%ax":"=a" (tr):"0" (0));
+	__asm__("str %%ax":"=a" (tr):"0" (0));	// 取任务寄存器 TR
 	printk("eax\t\tebx\t\tecx\t\tedx\n\r%8x\t%8x\t%8x\t%8x\n\r",
 		eax,ebx,ecx,edx);
 	printk("esi\t\tedi\t\tebp\t\tesp\n\r%8x\t%8x\t%8x\t%8x\n\r",
@@ -188,7 +188,7 @@ void trap_init(void)
 
 	/*
 		第一个参数是中断向量号
-		第二个参数是中断服务程序的地址
+		第二个参数是中断服务程序的地址，这些函数名前面加上下划线对应asm.s中的汇编的label :)
 	*/
 	set_trap_gate(0,&divide_error);
 	set_trap_gate(1,&debug);
